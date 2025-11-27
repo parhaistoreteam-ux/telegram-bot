@@ -49,8 +49,8 @@ def task(message):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data="done_task"))
     markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data="cancel_task"))
-    bot.send_message(chat_id, f"Task Gmail: {email}
-Password: {password}", reply_markup=markup)
+    bot.send_message(chat_id, f"Task Gmail: {email}\nPassword: {password}", reply_markup=markup)
+
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
