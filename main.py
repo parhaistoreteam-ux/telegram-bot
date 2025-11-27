@@ -6,7 +6,7 @@ import string
 from flask import Flask, request
 
 # ------------------------------
-# Configuration (env vars)
+# Configuration
 # ------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
@@ -133,7 +133,7 @@ def handle_start(message):
         bot.send_message(message.chat.id, f"Admin menu: Users: {len(users)}")
 
 # ------------------------------
-# Tasks
+# Tasks handler
 # ------------------------------
 @bot.message_handler(func=lambda msg: msg.text == "📝 Tasks")
 def show_tasks(message):
@@ -297,7 +297,18 @@ def callback_query(call):
     uid = call.message.chat.id
     ensure_user(uid)
 
-    # Done / Cancel tasks
+    # ---------- Withdraw method selection ----------
+    if data.startswith("wd_"):
+        method = data.split("_")[1]
+        users[uid]["state"] = f"awaiting_withdraw_{method}"
+        bot.answer_callback_query(call.id)
+        if method == "binance":
+            bot.send_message(uid,f"Enter the amount in USD you want to withdraw (min {BINANCE_MIN_USD} USD):")
+        else:
+            bot.send_message(uid,f"Enter the amount in PKR you want to withdraw (min {WITHDRAW_MIN_PKR} PKR):")
+        return
+
+    # ---------- Tasks ----------
     if data == "done_task":
         task = users[uid].get("current_task")
         if not task:
@@ -329,8 +340,8 @@ def callback_query(call):
             bot.answer_callback_query(call.id,"No task to cancel.")
         return
 
-    # Admin approve/reject task
-    if data.startswith("approve_task_") and call.message.chat.id==ADMIN_CHAT_ID:
+    # ---------- Admin approve/reject tasks ----------
+    if data.startswith("approve_task_") and uid==ADMIN_CHAT_ID:
         target_uid=int(data.split("_")[-1])
         task=users[target_uid].get("current_task")
         if not task:
@@ -352,7 +363,7 @@ def callback_query(call):
             bot.send_message(ref,f"🎉 You earned {REFERRAL_BONUS_PER_TASK} PKR from referral's approved task (user {target_uid}).")
         return
 
-    if data.startswith("reject_task_") and call.message.chat.id==ADMIN_CHAT_ID:
+    if data.startswith("reject_task_") and uid==ADMIN_CHAT_ID:
         target_uid=int(data.split("_")[-1])
         task=users[target_uid].get("current_task")
         if task:
@@ -365,8 +376,8 @@ def callback_query(call):
             bot.send_message(ADMIN_CHAT_ID,f"✖ Rejected task for user {target_uid}")
         return
 
-    # Withdraw approve/reject (same logic)
-    if data.startswith("approve_wd_") and call.message.chat.id==ADMIN_CHAT_ID:
+    # ---------- Admin approve/reject withdraw ----------
+    if data.startswith("approve_wd_") and uid==ADMIN_CHAT_ID:
         parts=data.split("_")
         idx=int(parts[2])
         target_uid=int(parts[3])
@@ -379,7 +390,7 @@ def callback_query(call):
         bot.send_message(ADMIN_CHAT_ID,f"✔ Approved withdraw for user {target_uid}")
         return
 
-    if data.startswith("reject_wd_") and call.message.chat.id==ADMIN_CHAT_ID:
+    if data.startswith("reject_wd_") and uid==ADMIN_CHAT_ID:
         parts=data.split("_")
         idx=int(parts[2])
         target_uid=int(parts[3])
@@ -390,4 +401,5 @@ def callback_query(call):
         users[target_uid]["balance"]+=pkr
         bot.send_message(target_uid,f"❌ Your withdrawal was rejected. {pkr} PKR refunded to balance.")
         bot.answer_callback_query(call.id,"Withdraw rejected and refunded.")
-        bot.send
+        bot.send_message(ADMIN_CHAT_ID,f"✖ Rejected withdraw for user {target_uid}")
+        return
