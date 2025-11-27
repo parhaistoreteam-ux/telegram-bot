@@ -3,6 +3,20 @@ import telebot
 from telebot import types
 import random
 import string
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_flask).start()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
@@ -35,19 +49,21 @@ def task(message):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data="done_task"))
     markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data="cancel_task"))
-    bot.send_message(chat_id, f"Task Gmail: {email}\nPassword: {password}", reply_markup=markup)
+    bot.send_message(chat_id, f"Task Gmail: {email}
+Password: {password}", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     chat_id = call.message.chat.id
     if call.data == "done_task":
         task = users[chat_id].get("current_task")
-        admin_markup = types.InlineKeyboardMarkup()
-        admin_markup.add(
-            types.InlineKeyboardButton("Approve", callback_data=f"approve_{chat_id}"),
-            types.InlineKeyboardButton("Reject", callback_data=f"reject_{chat_id}")
-        )
-        bot.send_message(ADMIN_CHAT_ID, f"User {chat_id} submitted task", reply_markup=admin_markup)
+        if task:
+            admin_markup = types.InlineKeyboardMarkup()
+            admin_markup.add(
+                types.InlineKeyboardButton("Approve", callback_data=f"approve_{chat_id}"),
+                types.InlineKeyboardButton("Reject", callback_data=f"reject_{chat_id}")
+            )
+            bot.send_message(ADMIN_CHAT_ID, f"User {chat_id} submitted task\nEmail: {task['email']}\nPassword: {task['password']}", reply_markup=admin_markup)
     elif call.data.startswith("approve_"):
         uid = int(call.data.split("_")[1])
         reward = users[uid]["current_task"]["reward"]
