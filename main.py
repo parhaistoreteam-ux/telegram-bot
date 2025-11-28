@@ -38,9 +38,31 @@ BINANCE_MIN_USD = 1
 TASK_USER_PROCESSING_MINUTES = 30
 WITHDRAW_PROCESSING_HOURS = 5
 
+# ============================================================
+# HELP TEXT
+# ============================================================
+
+HELP_TEXT = (
+    "📘 HELP MENU\n\n"
+    "🧾 TASK SYSTEM\n"
+    f"• Generated Gmail – {GEN_TASK_REWARD} PKR\n"
+    f"• Your Gmail – {OWN_TASK_REWARD} PKR\n"
+    f"• Facebook 2FA – {FB_TASK_REWARD} PKR\n"
+    f"• Review Time – Up to {TASK_USER_PROCESSING_MINUTES} minutes\n"
+    f"• Referral Bonus – {REFERRAL_BONUS_PER_TASK} PKR/task\n\n"
+    "💵 WITHDRAW SYSTEM\n"
+    f"• Min Withdraw: {WITHDRAW_MIN_PKR} PKR\n"
+    f"• Binance: {BINANCE_MIN_USD} USD (rate: {BINANCE_PKR_PER_USD} PKR)\n"
+    f"• Processing Time – {WITHDRAW_PROCESSING_HOURS} hours\n\n"
+    "👤 ACCOUNT\n"
+    "• Balance\n"
+    "• Referral Link\n"
+    "• Tasks\n\n"
+    "❗ Need help? Contact admin."
+)
 
 # ============================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ============================================================
 
 def ensure_user(uid, start_referrer=None):
@@ -60,9 +82,11 @@ def ensure_user(uid, start_referrer=None):
     u = users[uid]
 
     if start_referrer and start_referrer != uid:
-        u["referrer"] = start_referrer
-        if start_referrer in users:
-            users[start_referrer]["referrals_count"] += 1
+        # only set referrer if not already set
+        if u.get("referrer") is None:
+            u["referrer"] = start_referrer
+            if start_referrer in users:
+                users[start_referrer]["referrals_count"] += 1
 
     return u
 
@@ -86,7 +110,7 @@ def admin_notify(text, markup=None):
 
 
 # ============================================================
-# FLASK ROUTES (WEBHOOK SYSTEM)
+# FLASK ROUTES (WEBHOOK)
 # ============================================================
 
 @app.route('/')
@@ -111,7 +135,7 @@ def set_webhook():
 
 
 # ============================================================
-# KEYBOARD BUILDERS
+# KEYBOARDS
 # ============================================================
 
 def main_menu():
@@ -141,31 +165,7 @@ def withdraw_methods_markup():
 
 
 # ============================================================
-# HELP TEXT (STYLE B)
-# ============================================================
-
-HELP_TEXT = (
-    "📘 HELP MENU\n\n"
-    "🧾 TASK SYSTEM\n"
-    f"• Generated Gmail – 40 PKR\n"
-    f"• Your Gmail – 40 PKR\n"
-    f"• Facebook 2FA – 12 PKR\n"
-    f"• Review Time – Up to {TASK_USER_PROCESSING_MINUTES} minutes\n"
-    f"• Referral Bonus – {REFERRAL_BONUS_PER_TASK} PKR/task\n\n"
-    "💵 WITHDRAW SYSTEM\n"
-    f"• Min Withdraw: {WITHDRAW_MIN_PKR} PKR\n"
-    f"• Binance: {BINANCE_MIN_USD} USD (rate: {BINANCE_PKR_PER_USD} PKR)\n"
-    f"• Processing Time – {WITHDRAW_PROCESSING_HOURS} hours\n\n"
-    "👤 ACCOUNT\n"
-    "• Balance\n"
-    "• Referral Link\n"
-    "• Tasks\n\n"
-    "❗ Need help? Contact admin."
-)
-
-
-# ============================================================
-# /START COMMAND
+# COMMANDS / SIMPLE HANDLERS
 # ============================================================
 
 @bot.message_handler(commands=['start'])
@@ -177,7 +177,7 @@ def handle_start(message):
         try:
             ref = int(args[1])
         except:
-            pass
+            ref = None
 
     ensure_user(message.chat.id, start_referrer=ref)
     bot.send_message(message.chat.id, "Welcome! Choose an option:", reply_markup=main_menu())
@@ -185,10 +185,6 @@ def handle_start(message):
     if message.chat.id == ADMIN_CHAT_ID:
         bot.send_message(message.chat.id, f"Admin Panel Loaded\nUsers: {len(users)}")
 
-
-# ============================================================
-# /HELP COMMAND
-# ============================================================
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
@@ -201,7 +197,7 @@ def button_help(message):
 
 
 # ============================================================
-# TASK SELECTION
+# TASK SELECTION CALLBACKS
 # ============================================================
 
 @bot.message_handler(func=lambda m: m.text == "📝 Tasks")
@@ -249,7 +245,7 @@ def handle_task_choice(call):
     # FACEBOOK TASK
     if call.data == "task_fb":
         users[uid]["state"] = "awaiting_fb_details"
-        bot.send_message(uid, "Send fb_id fb_email fb_password 2fa_code", parse_mode="Markdown")
+        bot.send_message(uid, "Send: fb_id fb_email fb_password 2fa_code", parse_mode="Markdown")
         return
 
     # HELP BUTTON
@@ -259,7 +255,7 @@ def handle_task_choice(call):
 
 
 # ============================================================
-# MAIN MESSAGE HANDLER
+# TEXT MESSAGE HANDLER (MAIN)
 # ============================================================
 
 @bot.message_handler(func=lambda m: True)
@@ -268,111 +264,145 @@ def handle_text(message):
     ensure_user(uid)
     u = users[uid]
 
-    text = (message.text or "").strip().lower()
+    text = (message.text or "").strip()
 
     # MENU: BALANCE
-    if text in ["💼 balance", "balance"]:
+    if text.lower() in ["💼 balance", "balance"]:
         bot.send_message(uid, f"💼 Balance: {u['balance']} PKR\n🔒 Hold: {u['hold']} PKR\n")
         return
 
-    # MENU: WITHDRAW
-    if text in ["💰 withdraw", "withdraw"]:
+    # MENU: WITHDRAW (start)
+    if text.lower() in ["💰 withdraw", "withdraw"]:
         u["state"] = None
         bot.send_message(uid, "Select withdrawal method:", reply_markup=withdraw_methods_markup())
         return
 
     # MENU: TASKS
-    if text in ["📝 tasks", "tasks"]:
+    if text.lower() in ["📝 tasks", "tasks"]:
         bot.send_message(uid, "Choose a task:", reply_markup=tasks_menu())
         return
 
     # MENU: REFERRAL
-    if text in ["🔗 referral link", "referral", "/referral"]:
-        username = bot.get_me().username
-        link = f"https://t.me/{username}?start={uid}"
+    if text.lower() in ["🔗 referral link", "referral", "/referral"]:
+        try:
+            username = bot.get_me().username
+            link = f"https://t.me/{username}?start={uid}"
+        except Exception:
+            link = f"t.me/<bot_username>?start={uid}"
         bot.send_message(uid, f"Your Referral Link:\n{link}")
         return
 
     # HELP
-    if text in ["❓ help", "/help", "help"]:
+    if text.lower() in ["❓ help", "/help", "help"]:
         bot.send_message(uid, HELP_TEXT)
         return
 
-    # ======================================================
-    # WITHDRAW AMOUNT INPUT
-    # ======================================================
+    # ----------------------------------------------------
+    # WITHDRAW: awaiting_withdraw_<method> -> user entered amount
+    # Flow for Modern 4-Step:
+    # 1) select method -> set state awaiting_withdraw_<method>
+    # 2) user sends amount
+    # 3) bot asks account holder name
+    # 4) user sends account name -> bot asks account number
+    # 5) user sends account number -> request created and sent to admin
+    # ----------------------------------------------------
     if u["state"] and u["state"].startswith("awaiting_withdraw_"):
         method = u["state"].split("_", 2)[2]
 
         try:
             amt = float(message.text)
         except:
-            bot.send_message(uid, "❌ Invalid amount.")
+            bot.send_message(uid, "❌ Invalid amount. Send a number (e.g. 500).")
             return
 
-        # Binance USD withdraw
+        # BINANCE (USD)
         if method == "binance":
             if amt < BINANCE_MIN_USD:
                 bot.send_message(uid, f"Minimum is {BINANCE_MIN_USD} USD")
                 return
 
-            required_pkr = amt * BINANCE_PKR_PER_USD
+            required_pkr = int(amt * BINANCE_PKR_PER_USD)
 
             if u["balance"] < required_pkr:
-                bot.send_message(uid, f"Not enough balance.")
+                bot.send_message(uid, f"❌ Not enough balance. You need {required_pkr} PKR.")
                 return
 
             u["withdraw_temp"] = {
                 "method": method,
                 "usd_amount": amt,
-                "pkr_amount": int(required_pkr)
+                "pkr_amount": required_pkr
             }
-            u["state"] = "awaiting_withdraw_account_binance"
-            bot.send_message(uid, "Send Binance account email/ID:")
-            return
 
-        # Normal PKR withdraw
-        if amt < WITHDRAW_MIN_PKR:
-            bot.send_message(uid, f"Minimum is {WITHDRAW_MIN_PKR} PKR")
-            return
+        else:
+            # PKR withdraw methods
+            if amt < WITHDRAW_MIN_PKR:
+                bot.send_message(uid, f"Minimum is {WITHDRAW_MIN_PKR} PKR")
+                return
 
-        if u["balance"] < amt:
-            bot.send_message(uid, "Insufficient balance.")
-            return
+            if u["balance"] < amt:
+                bot.send_message(uid, "❌ Insufficient balance.")
+                return
 
-        u["withdraw_temp"] = {
-            "method": method,
-            "pkr_amount": int(amt)
-        }
-        u["state"] = f"awaiting_withdraw_account_{method}"
-        bot.send_message(uid, "Send account number:")
+            u["withdraw_temp"] = {
+                "method": method,
+                "pkr_amount": int(amt)
+            }
+
+        # Next step: ask for account holder name
+        u["state"] = f"awaiting_account_name_{method}"
+        bot.send_message(uid, "✔ Send Account Holder Name:")
         return
 
-    # ======================================================
-    # WITHDRAW ACCOUNT INFO
-    # ======================================================
-    if u["state"] and u["state"].startswith("awaiting_withdraw_account_"):
-        temp = u.get("withdraw_temp", {})
-        account = message.text
+    # ----------------------------------------------------
+    # WITHDRAW: awaiting_account_name_<method>
+    # ----------------------------------------------------
+    if u["state"] and u["state"].startswith("awaiting_account_name_"):
+        method = u["state"].split("_", 3)[3]
 
-        temp["account_info"] = account
+        if "withdraw_temp" not in u:
+            bot.send_message(uid, "❌ Error: No withdraw in progress. Start again.")
+            u["state"] = None
+            return
+
+        u["withdraw_temp"]["account_name"] = message.text.strip()
+        u["state"] = f"awaiting_account_number_{method}"
+        bot.send_message(uid, "✔ Now send Account Number:")
+        return
+
+    # ----------------------------------------------------
+    # WITHDRAW: awaiting_account_number_<method> -> finalize
+    # ----------------------------------------------------
+    if u["state"] and u["state"].startswith("awaiting_account_number_"):
+        method = u["state"].split("_", 3)[3]
+        temp = u.get("withdraw_temp", None)
+
+        if not temp:
+            bot.send_message(uid, "❌ Error: No withdraw temp found. Start again.")
+            u["state"] = None
+            return
+
+        temp["account_number"] = message.text.strip()
+
+        # Build request object
         req = {
             "user_id": uid,
             "method": temp["method"],
+            "account_name": temp.get("account_name"),
+            "account_number": temp.get("account_number"),
             "pkr_amount": temp.get("pkr_amount"),
             "usd_amount": temp.get("usd_amount"),
-            "account_info": account,
             "status": "pending"
         }
 
+        # Append request
         u["withdraw_requests"].append(req)
 
-        # HOLD BALANCE
-        hold = temp.get("pkr_amount", 0)
+        # Hold funds
+        hold = req.get("pkr_amount", 0)
         u["balance"] -= hold
         u["hold"] += hold
 
-        # Notify admin
+        # Notify admin with approve/reject buttons
         admin_markup = types.InlineKeyboardMarkup()
         idx = len(u["withdraw_requests"]) - 1
         admin_markup.add(
@@ -380,12 +410,21 @@ def handle_text(message):
             types.InlineKeyboardButton("Reject", callback_data=f"reject_wd_{idx}_{uid}")
         )
 
-        admin_notify(
-            f"💸 Withdraw Request\nUser: {uid}\nAmount: {hold} PKR\nAccount: {account}",
-            admin_markup
+        # Compose admin message
+        admin_text = (
+            f"💸 *New Withdraw Request*\n"
+            f"User: `{uid}`\n"
+            f"Method: *{temp['method']}*\n"
+            f"Account Name: `{temp.get('account_name')}`\n"
+            f"Account Number: `{temp.get('account_number')}`\n"
+            f"Amount (PKR): `{req.get('pkr_amount')}`\n"
+            f"Amount (USD): `{req.get('usd_amount')}`\n"
+            f"Processing Time: {WITHDRAW_PROCESSING_HOURS} hours\n"
         )
 
-        bot.send_message(uid, "Withdraw request submitted.")
+        admin_notify(admin_text, admin_markup)
+
+        bot.send_message(uid, f"⏳ Your withdraw request is under review. Processing time: {WITHDRAW_PROCESSING_HOURS} hours.")
         u["state"] = None
         u.pop("withdraw_temp", None)
         return
@@ -393,6 +432,7 @@ def handle_text(message):
     # ======================================================
     # TASK INPUTS
     # ======================================================
+
     if u["state"] == "awaiting_own_gmail":
         parts = message.text.split()
         if len(parts) < 2:
@@ -446,7 +486,7 @@ def handle_text(message):
 
 
 # ============================================================
-# CALLBACKS (ADMIN + TASK SUBMIT)
+# CALLBACKS: withdraw button selection, task done/cancel, admin approvals
 # ============================================================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -456,7 +496,7 @@ def callback_query(call):
     ensure_user(uid)
 
     # --------------------------
-    # START WITHDRAWAL PROCESS
+    # USER SELECTS WITHDRAW METHOD
     # --------------------------
     if data.startswith("wd_"):
         method = data.split("_", 1)[1]
@@ -470,7 +510,7 @@ def callback_query(call):
         return
 
     # --------------------------
-    # TASK DONE / CANCEL
+    # TASK DONE / CANCEL (USER)
     # --------------------------
     if data == "done_task":
         task = users[uid]["current_task"]
@@ -479,20 +519,38 @@ def callback_query(call):
 
         reward = task["reward"]
 
-        users[uid]["hold"] += reward  
+        # place in hold
+        users[uid]["hold"] += reward
         task["status"] = "pending_admin"
 
         bot.answer_callback_query(call.id)
-        bot.send_message(uid, "Task submitted. Admin reviewing.")
+        bot.send_message(uid, "⏳ Task submitted. Admin reviewing.")
 
-        # Admin panel
+        # SEND FULL TASK INFO TO ADMIN
+        details = "📥 *New Task Submitted*\n"
+        details += f"👤 User: `{uid}`\n"
+        details += f"💰 Reward: {reward} PKR\n"
+        details += f"📌 Type: *{task['type']}*\n\n"
+
+        if task["type"] == "generated":
+            details += f"Email: `{task['email']}`\nPassword: `{task['password']}`\n"
+
+        elif task["type"] == "own":
+            details += f"Email: `{task['email']}`\nPassword: `{task['password']}`\n"
+
+        elif task["type"] == "facebook":
+            details += f"FB ID: `{task['fb_id']}`\n"
+            details += f"Email: `{task['email']}`\n"
+            details += f"Password: `{task['password']}`\n"
+            details += f"2FA: `{task['2fa']}`\n"
+
         admin_markup = types.InlineKeyboardMarkup()
         admin_markup.add(
             types.InlineKeyboardButton("Approve", callback_data=f"approve_task_{uid}"),
             types.InlineKeyboardButton("Reject", callback_data=f"reject_task_{uid}")
         )
 
-        admin_notify("New task submitted.", admin_markup)
+        admin_notify(details, admin_markup)
         return
 
     if data == "cancel_task":
@@ -506,42 +564,60 @@ def callback_query(call):
     # ADMIN: APPROVE TASK
     # --------------------------
     if data.startswith("approve_task_") and uid == ADMIN_CHAT_ID:
-        target = int(data.split("_")[-1])
-        task = users[target]["current_task"]
+        try:
+            target = int(data.split("_")[-1])
+        except:
+            bot.answer_callback_query(call.id, "Invalid target.")
+            return
+
+        task = users.get(target, {}).get("current_task")
+        if not task:
+            bot.answer_callback_query(call.id, "Task not found.")
+            return
 
         reward = task["reward"]
+
+        # move from hold to balance
         users[target]["hold"] -= reward
         users[target]["balance"] += reward
         users[target]["tasks_completed"] += 1
-
         users[target]["current_task"] = None
 
         bot.answer_callback_query(call.id)
-        bot.send_message(target, f"Task approved! +{reward} PKR")
+        bot.send_message(target, f"✅ Task approved! +{reward} PKR")
         bot.send_message(ADMIN_CHAT_ID, f"Approved task for {target}")
 
         # Referral bonus
-        ref = users[target]["referrer"]
-        if ref in users:
+        ref = users[target].get("referrer")
+        if ref and ref in users:
             users[ref]["balance"] += REFERRAL_BONUS_PER_TASK
             users[ref]["referral_earned"] += REFERRAL_BONUS_PER_TASK
-            bot.send_message(ref, "Referral bonus added!")
+            bot.send_message(ref, f"🎉 Referral bonus added! +{REFERRAL_BONUS_PER_TASK} PKR")
         return
 
     # --------------------------
     # ADMIN: REJECT TASK
     # --------------------------
     if data.startswith("reject_task_") and uid == ADMIN_CHAT_ID:
-        target = int(data.split("_")[-1])
+        try:
+            target = int(data.split("_")[-1])
+        except:
+            bot.answer_callback_query(call.id, "Invalid target.")
+            return
 
-        task = users[target]["current_task"]
+        task = users.get(target, {}).get("current_task")
+        if not task:
+            bot.answer_callback_query(call.id, "Task not found.")
+            return
+
         reward = task["reward"]
 
+        # release hold
         users[target]["hold"] -= reward
         users[target]["current_task"] = None
 
         bot.answer_callback_query(call.id)
-        bot.send_message(target, "Task rejected.")
+        bot.send_message(target, "❌ Task rejected.")
         bot.send_message(ADMIN_CHAT_ID, f"Rejected task for {target}")
         return
 
@@ -549,18 +625,41 @@ def callback_query(call):
     # ADMIN: WITHDRAW APPROVE
     # --------------------------
     if data.startswith("approve_wd_") and uid == ADMIN_CHAT_ID:
-        _, _, idx, target = data.split("_")
-        idx = int(idx)
-        target = int(target)
+        parts = data.split("_")
+        # expected: ["approve","wd","<idx>","<target>"]
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "Invalid callback data.")
+            return
+        try:
+            idx = int(parts[2])
+            target = int(parts[3])
+        except:
+            bot.answer_callback_query(call.id, "Invalid indices.")
+            return
 
-        req = users[target]["withdraw_requests"][idx]
+        if target not in users:
+            bot.answer_callback_query(call.id, "User not found.")
+            return
+
+        user_obj = users[target]
+        if idx < 0 or idx >= len(user_obj["withdraw_requests"]):
+            bot.answer_callback_query(call.id, "Request not found.")
+            return
+
+        req = user_obj["withdraw_requests"][idx]
+        if req.get("status") == "approved":
+            bot.answer_callback_query(call.id, "Already approved.")
+            return
+
         req["status"] = "approved"
 
         amount = req.get("pkr_amount", 0)
-        users[target]["hold"] -= amount
+
+        # hold was already reserved; on approve simply subtract hold (already subtracted from balance)
+        user_obj["hold"] -= amount
 
         bot.answer_callback_query(call.id)
-        bot.send_message(target, f"Withdraw approved: {amount} PKR")
+        bot.send_message(target, f"✅ Withdraw approved: {amount} PKR")
         bot.send_message(ADMIN_CHAT_ID, f"Approved withdraw for {target}")
         return
 
@@ -568,22 +667,45 @@ def callback_query(call):
     # ADMIN: WITHDRAW REJECT
     # --------------------------
     if data.startswith("reject_wd_") and uid == ADMIN_CHAT_ID:
-        _, _, idx, target = data.split("_")
-        idx = int(idx)
-        target = int(target)
+        parts = data.split("_")
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "Invalid callback data.")
+            return
+        try:
+            idx = int(parts[2])
+            target = int(parts[3])
+        except:
+            bot.answer_callback_query(call.id, "Invalid indices.")
+            return
 
-        req = users[target]["withdraw_requests"][idx]
+        if target not in users:
+            bot.answer_callback_query(call.id, "User not found.")
+            return
+
+        user_obj = users[target]
+        if idx < 0 or idx >= len(user_obj["withdraw_requests"]):
+            bot.answer_callback_query(call.id, "Request not found.")
+            return
+
+        req = user_obj["withdraw_requests"][idx]
+        if req.get("status") == "rejected":
+            bot.answer_callback_query(call.id, "Already rejected.")
+            return
+
         req["status"] = "rejected"
 
         amount = req.get("pkr_amount", 0)
-        users[target]["hold"] -= amount
-        users[target]["balance"] += amount
+
+        # refund
+        user_obj["hold"] -= amount
+        user_obj["balance"] += amount
 
         bot.answer_callback_query(call.id)
-        bot.send_message(target, f"Withdraw rejected. {amount} refunded.")
+        bot.send_message(target, f"❌ Withdraw rejected. {amount} PKR refunded.")
         bot.send_message(ADMIN_CHAT_ID, f"Rejected withdraw for {target}")
         return
 
+    # default answer
     bot.answer_callback_query(call.id)
 
 
@@ -592,4 +714,7 @@ def callback_query(call):
 # ============================================================
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Helpful startup print
+    print("Starting bot... Ensure BOT_TOKEN, ADMIN_CHAT_ID, WEBHOOK_URL are set.")
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
