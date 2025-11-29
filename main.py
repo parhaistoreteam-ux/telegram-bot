@@ -115,28 +115,44 @@ init_db()
 # HELP TEXT
 # ============================================================
 
-HELP_TEXT = f"""
-📘 HELP MENU
+HELP_TEXT = (
+    "📘 HELP MENU
 
-🧾 TASK SYSTEM
-• Generated Gmail – {GEN_TASK_REWARD} PKR
-• Your Gmail – {OWN_TASK_REWARD} PKR
-• Facebook 2FA – {FB_TASK_REWARD} PKR
-• Review Time – Up to {TASK_USER_PROCESSING_MINUTES} minutes
-• Referral Bonus – {REFERRAL_BONUS_PER_TASK} PKR/task
+"
+    "🧾 TASK SYSTEM
+"
+    f"• Generated Gmail – {GEN_TASK_REWARD} PKR
+"
+    f"• Your Gmail – {OWN_TASK_REWARD} PKR
+"
+    f"• Facebook 2FA – {FB_TASK_REWARD} PKR
+"
+    f"• Review Time – Up to {TASK_USER_PROCESSING_MINUTES} minutes
+"
+    f"• Referral Bonus – {REFERRAL_BONUS_PER_TASK} PKR/task
 
-💵 WITHDRAW SYSTEM
-• Min Withdraw: {WITHDRAW_MIN_PKR} PKR
-• Binance: {BINANCE_MIN_USD} USD (rate: {BINANCE_PKR_PER_USD} PKR)
-• Processing Time – {WITHDRAW_PROCESSING_HOURS} hours
+"
+    "💵 WITHDRAW SYSTEM
+"
+    f"• Min Withdraw: {WITHDRAW_MIN_PKR} PKR
+"
+    f"• Binance: {BINANCE_MIN_USD} USD (rate: {BINANCE_PKR_PER_USD} PKR)
+"
+    f"• Processing Time – {WITHDRAW_PROCESSING_HOURS} hours
 
-👤 ACCOUNT
-• Balance
-• Referral Link
-• Tasks
+"
+    "👤 ACCOUNT
+"
+    "• Balance
+"
+    "• Referral Link
+"
+    "• Tasks
 
-❗ Need help? Contact admin.
-"""
+"
+    "❗ Need help? Contact admin."
+)
+
 # ============================================================
 # DATABASE OPERATIONS
 # ============================================================
@@ -291,8 +307,7 @@ def handle_start(message):
             cur.execute("SELECT COUNT(*) as c FROM users")
             total = cur.fetchone()['c']
             conn.close()
-        bot.send_message(message.chat.id, f"Admin Panel Loaded
-Users: {total}")
+        bot.send_message(message.chat.id, "Admin Panel Loaded"")
 
 
 @bot.message_handler(commands=['help'])
