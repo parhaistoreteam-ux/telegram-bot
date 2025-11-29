@@ -851,6 +851,58 @@ def callback_query(call):
 
     # default: just acknowledge
     bot.answer_callback_query(call.id)
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if message.chat.id != ADMIN_CHAT_ID:
+        bot.send_message(message.chat.id, "❌ You are not authorized.")
+        return
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("👤 User Balance", "➕ Add Balance", "➖ Reduce Balance")
+    markup.add("📊 Total Users", "📁 Backup Data")
+    
+    bot.send_message(message.chat.id, "🔐 Admin Panel:", reply_markup=markup)
+@bot.message_handler(func=lambda m: m.text == "👤 User Balance")
+def ask_user_id(message):
+    if message.chat.id != ADMIN_CHAT_ID:
+        return
+    bot.send_message(message.chat.id, "Enter User ID:")
+    bot.register_next_step_handler(message, get_user_balance)
+
+def get_user_balance(message):
+    uid = message.text.strip()
+    data = load_user_data(uid)
+    if data:
+        bot.send_message(message.chat.id, f"User {uid} Balance: {data['amount']} PKR")
+    else:
+        bot.send_message(message.chat.id, "User not found.")
+@bot.message_handler(func=lambda m: m.text == "➕ Add Balance")
+def ask_add_balance_id(message):
+    if message.chat.id != ADMIN_CHAT_ID:
+        return
+    bot.send_message(message.chat.id, "Enter User ID to add balance:")
+    bot.register_next_step_handler(message, admin_add_amount)
+
+def admin_add_amount(message):
+    uid = message.text.strip()
+    bot.send_message(
+        message.chat.id, 
+        f"Enter amount to add to {uid}:"
+    )
+    bot.register_next_step_handler(message, lambda m: add_amount(uid, m))
+
+def add_amount(uid, message):
+    try:
+        amount = int(message.text)
+        data = load_user_data(uid)
+        if not data:
+            bot.send_message(message.chat.id, "User not found.")
+            return
+        data["amount"] += amount
+        save_user_data(uid, data)
+        bot.send_message(message.chat.id, f"Added {amount} PKR to {uid}.")
+    except:
+        bot.send_message(message.chat.id, "Invalid amount.")
 
 # ============================================================
 # RUN FLASK SERVER
