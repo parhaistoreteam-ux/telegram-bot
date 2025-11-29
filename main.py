@@ -116,43 +116,23 @@ init_db()
 # ============================================================
 
 HELP_TEXT = (
-    "📘 HELP MENU
-
-"
-    "🧾 TASK SYSTEM
-"
-    f"• Generated Gmail – {GEN_TASK_REWARD} PKR
-"
-    f"• Your Gmail – {OWN_TASK_REWARD} PKR
-"
-    f"• Facebook 2FA – {FB_TASK_REWARD} PKR
-"
-    f"• Review Time – Up to {TASK_USER_PROCESSING_MINUTES} minutes
-"
-    f"• Referral Bonus – {REFERRAL_BONUS_PER_TASK} PKR/task
-
-"
-    "💵 WITHDRAW SYSTEM
-"
-    f"• Min Withdraw: {WITHDRAW_MIN_PKR} PKR
-"
-    f"• Binance: {BINANCE_MIN_USD} USD (rate: {BINANCE_PKR_PER_USD} PKR)
-"
-    f"• Processing Time – {WITHDRAW_PROCESSING_HOURS} hours
-
-"
-    "👤 ACCOUNT
-"
-    "• Balance
-"
-    "• Referral Link
-"
-    "• Tasks
-
-"
+    "📘 HELP MENU\n\n"
+    "🧾 TASK SYSTEM\n"
+    f"• Generated Gmail – {GEN_TASK_REWARD} PKR\n"
+    f"• Your Gmail – {OWN_TASK_REWARD} PKR\n"
+    f"• Facebook 2FA – {FB_TASK_REWARD} PKR\n"
+    f"• Review Time – Up to {TASK_USER_PROCESSING_MINUTES} minutes\n"
+    f"• Referral Bonus – {REFERRAL_BONUS_PER_TASK} PKR/task\n\n"
+    "💵 WITHDRAW SYSTEM\n"
+    f"• Min Withdraw: {WITHDRAW_MIN_PKR} PKR\n"
+    f"• Binance: {BINANCE_MIN_USD} USD (rate: {BINANCE_PKR_PER_USD} PKR)\n"
+    f"• Processing Time – {WITHDRAW_PROCESSING_HOURS} hours\n\n"
+    "👤 ACCOUNT\n"
+    "• Balance\n"
+    "• Referral Link\n"
+    "• Tasks\n\n"
     "❗ Need help? Contact admin."
 )
-
 # ============================================================
 # DATABASE OPERATIONS
 # ============================================================
