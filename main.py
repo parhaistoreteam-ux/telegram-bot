@@ -20,10 +20,10 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
 # ============================================================
-# IN-MEMORY DATA STORAGE
+# IN-MEMORY DATA STORAGE (NOTE: persist to DB for production)
 # ============================================================
 
-users = {}
+users = {}  # In-memory. Persist this (Redis/Mongo/SQLite) for production.
 
 # CONSTANTS
 REFERRAL_BONUS_PER_TASK = 2
@@ -66,15 +66,18 @@ HELP_TEXT = (
 # ============================================================
 
 def ensure_user(uid, start_referrer=None):
+    """Ensure user record exists. NOTE: For production, persist storage."""
     if uid not in users:
         users[uid] = {
-            "balance": 0,
-            "hold": 0,
+            "balance": 0,               # available balance
+            "hold": 0,                  # reserved (pending) amount
             "tasks_completed": 0,
             "referrer": None,
             "referrals_count": 0,
             "referral_earned": 0,
-            "current_task": None,
+            "current_task": None,       # temp for composing a task before 'Done'
+            "tasks": [],                # list of all submitted tasks (pending/approved/rejected)
+            "next_task_id": 1,          # incremental id for tasks
             "state": None,
             "withdraw_requests": []
         }
@@ -211,7 +214,7 @@ def handle_task_choice(call):
     uid = call.message.chat.id
     ensure_user(uid)
 
-    # GENERATED GMAIL TASK
+    # GENERATED GMAIL TASK - create a temporary current_task ready to be submitted
     if call.data == "task_gen":
         email, password = generate_email()
         users[uid]["current_task"] = {
@@ -219,7 +222,7 @@ def handle_task_choice(call):
             "email": email,
             "password": password,
             "reward": GEN_TASK_REWARD,
-            "status": "pending"
+            "status": "draft"   # draft until user presses Done
         }
 
         text = (
@@ -268,7 +271,8 @@ def handle_text(message):
 
     # MENU: BALANCE
     if text.lower() in ["💼 balance", "balance"]:
-        bot.send_message(uid, f"💼 Balance: {u['balance']} PKR\n🔒 Hold: {u['hold']} PKR\n")
+        bot.send_message(uid, f"💼 Balance: {u['balance']} PKR\n🔒 Hold: {u['hold']} PKR\n"
+                              f"📥 Pending Tasks: {len([t for t in u['tasks'] if t.get('status') == 'pending_admin'])}")
         return
 
     # MENU: WITHDRAW (start)
@@ -299,12 +303,6 @@ def handle_text(message):
 
     # ----------------------------------------------------
     # WITHDRAW: awaiting_withdraw_<method> -> user entered amount
-    # Flow for Modern 4-Step:
-    # 1) select method -> set state awaiting_withdraw_<method>
-    # 2) user sends amount
-    # 3) bot asks account holder name
-    # 4) user sends account name -> bot asks account number
-    # 5) user sends account number -> request created and sent to admin
     # ----------------------------------------------------
     if u["state"] and u["state"].startswith("awaiting_withdraw_"):
         method = u["state"].split("_", 2)[2]
@@ -399,6 +397,13 @@ def handle_text(message):
 
         # Hold funds
         hold = req.get("pkr_amount", 0)
+        # Safety: don't let balance go negative
+        if hold > u["balance"]:
+            bot.send_message(uid, "❌ Unexpected error: insufficient balance.")
+            u["state"] = None
+            u.pop("withdraw_temp", None)
+            return
+
         u["balance"] -= hold
         u["hold"] += hold
 
@@ -430,7 +435,7 @@ def handle_text(message):
         return
 
     # ======================================================
-    # TASK INPUTS
+    # TASK INPUTS (own gmail / fb)
     # ======================================================
 
     if u["state"] == "awaiting_own_gmail":
@@ -439,12 +444,13 @@ def handle_text(message):
             bot.send_message(uid, "Send: email password")
             return
 
+        # Save as temporary current task (user must press Done to submit)
         users[uid]["current_task"] = {
             "type": "own",
             "email": parts[0],
             "password": " ".join(parts[1:]),
             "reward": OWN_TASK_REWARD,
-            "status": "pending"
+            "status": "draft"
         }
 
         u["state"] = None
@@ -453,7 +459,7 @@ def handle_text(message):
         markup.add(types.InlineKeyboardButton("Done", callback_data="done_task"))
         markup.add(types.InlineKeyboardButton("Cancel", callback_data="cancel_task"))
 
-        bot.send_message(uid, "Credentials saved.", reply_markup=markup)
+        bot.send_message(uid, "Credentials saved. Press *Done* when finished.", reply_markup=markup, parse_mode="Markdown")
         return
 
     if u["state"] == "awaiting_fb_details":
@@ -469,7 +475,7 @@ def handle_text(message):
             "password": parts[2],
             "2fa": parts[3],
             "reward": FB_TASK_REWARD,
-            "status": "pending"
+            "status": "draft"
         }
 
         u["state"] = None
@@ -478,7 +484,7 @@ def handle_text(message):
         markup.add(types.InlineKeyboardButton("Done", callback_data="done_task"))
         markup.add(types.InlineKeyboardButton("Cancel", callback_data="cancel_task"))
 
-        bot.send_message(uid, "Facebook info saved.", reply_markup=markup)
+        bot.send_message(uid, "Facebook info saved. Press *Done* when finished.", reply_markup=markup)
         return
 
     # FALLBACK
@@ -486,7 +492,7 @@ def handle_text(message):
 
 
 # ============================================================
-# CALLBACKS: withdraw button selection, task done/cancel, admin approvals
+# CALLBACKS: withdraw selection, task done/cancel, admin approvals
 # ============================================================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -513,41 +519,65 @@ def callback_query(call):
     # TASK DONE / CANCEL (USER)
     # --------------------------
     if data == "done_task":
-        task = users[uid]["current_task"]
+        u = users[uid]
+        task = u.get("current_task")
         if not task:
-            return bot.answer_callback_query(call.id, "No active task.")
+            return bot.answer_callback_query(call.id, "No active task to submit.")
 
-        reward = task["reward"]
+        reward = int(task.get("reward", 0))
 
-        # place in hold
-        users[uid]["hold"] += reward
-        task["status"] = "pending_admin"
+        # Create persistent task entry with unique id
+        task_id = u["next_task_id"]
+        u["next_task_id"] += 1
+
+        task_entry = {
+            "id": task_id,
+            "type": task.get("type"),
+            # copy fields depending on type
+            "email": task.get("email"),
+            "password": task.get("password"),
+            "fb_id": task.get("fb_id"),
+            "2fa": task.get("2fa"),
+            "reward": reward,
+            "status": "pending_admin"
+        }
+
+        # Append to user's tasks list
+        u["tasks"].append(task_entry)
+
+        # Reserve funds in hold (task reward reserved until admin approves)
+        u["hold"] += reward
+
+        # clear temporary current_task so user can create another
+        u["current_task"] = None
 
         bot.answer_callback_query(call.id)
-        bot.send_message(uid, "⏳ Task submitted. Admin reviewing.")
+        bot.send_message(uid, "⏳ Task submitted. Admin reviewing. You can do other tasks while this is pending.")
 
-        # SEND FULL TASK INFO TO ADMIN
+        # SEND FULL TASK INFO TO ADMIN with task id (so admin can approve specific task)
         details = "📥 *New Task Submitted*\n"
         details += f"👤 User: `{uid}`\n"
         details += f"💰 Reward: {reward} PKR\n"
-        details += f"📌 Type: *{task['type']}*\n\n"
+        details += f"📌 Type: *{task_entry['type']}*\n"
+        details += f"🔢 TaskID: `{task_id}`\n\n"
 
-        if task["type"] == "generated":
-            details += f"Email: `{task['email']}`\nPassword: `{task['password']}`\n"
+        if task_entry["type"] == "generated":
+            details += f"Email: `{task_entry.get('email')}`\nPassword: `{task_entry.get('password')}`\n"
 
-        elif task["type"] == "own":
-            details += f"Email: `{task['email']}`\nPassword: `{task['password']}`\n"
+        elif task_entry["type"] == "own":
+            details += f"Email: `{task_entry.get('email')}`\nPassword: `{task_entry.get('password')}`\n"
 
-        elif task["type"] == "facebook":
-            details += f"FB ID: `{task['fb_id']}`\n"
-            details += f"Email: `{task['email']}`\n"
-            details += f"Password: `{task['password']}`\n"
-            details += f"2FA: `{task['2fa']}`\n"
+        elif task_entry["type"] == "facebook":
+            details += f"FB ID: `{task_entry.get('fb_id')}`\n"
+            details += f"Email: `{task_entry.get('email')}`\n"
+            details += f"Password: `{task_entry.get('password')}`\n"
+            details += f"2FA: `{task_entry.get('2fa')}`\n"
 
         admin_markup = types.InlineKeyboardMarkup()
+        # Include user and task id so admin action can find the exact task
         admin_markup.add(
-            types.InlineKeyboardButton("Approve", callback_data=f"approve_task_{uid}"),
-            types.InlineKeyboardButton("Reject", callback_data=f"reject_task_{uid}")
+            types.InlineKeyboardButton("Approve", callback_data=f"approve_task_{uid}_{task_id}"),
+            types.InlineKeyboardButton("Reject", callback_data=f"reject_task_{uid}_{task_id}")
         )
 
         admin_notify(details, admin_markup)
@@ -564,31 +594,54 @@ def callback_query(call):
     # ADMIN: APPROVE TASK
     # --------------------------
     if data.startswith("approve_task_") and uid == ADMIN_CHAT_ID:
+        # format: approve_task_<target>_<task_id>
+        parts = data.split("_")
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "Invalid callback data.")
+            return
         try:
-            target = int(data.split("_")[-1])
+            target = int(parts[2])
+            task_id = int(parts[3])
         except:
-            bot.answer_callback_query(call.id, "Invalid target.")
+            bot.answer_callback_query(call.id, "Invalid indices.")
             return
 
-        task = users.get(target, {}).get("current_task")
+        if target not in users:
+            bot.answer_callback_query(call.id, "User not found.")
+            return
+
+        user_obj = users[target]
+        # find task by id
+        task = next((t for t in user_obj["tasks"] if t["id"] == task_id), None)
         if not task:
             bot.answer_callback_query(call.id, "Task not found.")
             return
 
-        reward = task["reward"]
+        if task.get("status") == "approved":
+            bot.answer_callback_query(call.id, "Already approved.")
+            return
 
-        # move from hold to balance
-        users[target]["hold"] -= reward
-        users[target]["balance"] += reward
-        users[target]["tasks_completed"] += 1
-        users[target]["current_task"] = None
+        reward = int(task.get("reward", 0))
+
+        # Safeguard: ensure hold has enough; if not, correct it
+        if user_obj["hold"] < reward:
+            # If hold is missing (bug/accidental), attempt to avoid negative hold
+            diff = reward - user_obj["hold"]
+            # don't attempt auto-deduct user's balance here; just set hold to 0 and credit balance with reward
+            user_obj["hold"] = 0
+        else:
+            user_obj["hold"] -= reward
+
+        user_obj["balance"] += reward
+        task["status"] = "approved"
+        user_obj["tasks_completed"] += 1
 
         bot.answer_callback_query(call.id)
         bot.send_message(target, f"✅ Task approved! +{reward} PKR")
-        bot.send_message(ADMIN_CHAT_ID, f"Approved task for {target}")
+        bot.send_message(ADMIN_CHAT_ID, f"Approved task {task_id} for {target}")
 
         # Referral bonus
-        ref = users[target].get("referrer")
+        ref = user_obj.get("referrer")
         if ref and ref in users:
             users[ref]["balance"] += REFERRAL_BONUS_PER_TASK
             users[ref]["referral_earned"] += REFERRAL_BONUS_PER_TASK
@@ -599,26 +652,46 @@ def callback_query(call):
     # ADMIN: REJECT TASK
     # --------------------------
     if data.startswith("reject_task_") and uid == ADMIN_CHAT_ID:
+        # format: reject_task_<target>_<task_id>
+        parts = data.split("_")
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "Invalid callback data.")
+            return
         try:
-            target = int(data.split("_")[-1])
+            target = int(parts[2])
+            task_id = int(parts[3])
         except:
-            bot.answer_callback_query(call.id, "Invalid target.")
+            bot.answer_callback_query(call.id, "Invalid indices.")
             return
 
-        task = users.get(target, {}).get("current_task")
+        if target not in users:
+            bot.answer_callback_query(call.id, "User not found.")
+            return
+
+        user_obj = users[target]
+        task = next((t for t in user_obj["tasks"] if t["id"] == task_id), None)
         if not task:
             bot.answer_callback_query(call.id, "Task not found.")
             return
 
-        reward = task["reward"]
+        if task.get("status") == "rejected":
+            bot.answer_callback_query(call.id, "Already rejected.")
+            return
 
-        # release hold
-        users[target]["hold"] -= reward
-        users[target]["current_task"] = None
+        reward = int(task.get("reward", 0))
+
+        # release hold (if hold contains the reserved reward)
+        if user_obj["hold"] >= reward:
+            user_obj["hold"] -= reward
+        else:
+            # held amount missing (shouldn't happen), just set hold=0
+            user_obj["hold"] = max(0, user_obj["hold"])
+
+        task["status"] = "rejected"
 
         bot.answer_callback_query(call.id)
-        bot.send_message(target, "❌ Task rejected.")
-        bot.send_message(ADMIN_CHAT_ID, f"Rejected task for {target}")
+        bot.send_message(target, f"❌ Task rejected.")
+        bot.send_message(ADMIN_CHAT_ID, f"Rejected task {task_id} for {target}")
         return
 
     # --------------------------
@@ -655,8 +728,13 @@ def callback_query(call):
 
         amount = req.get("pkr_amount", 0)
 
-        # hold was already reserved; on approve simply subtract hold (already subtracted from balance)
-        user_obj["hold"] -= amount
+        # hold was already reserved (balance was already reduced when user submitted),
+        # on approve we simply reduce the hold
+        if user_obj["hold"] >= amount:
+            user_obj["hold"] -= amount
+        else:
+            # safety: don't make hold negative
+            user_obj["hold"] = 0
 
         bot.answer_callback_query(call.id)
         bot.send_message(target, f"✅ Withdraw approved: {amount} PKR")
@@ -697,7 +775,13 @@ def callback_query(call):
         amount = req.get("pkr_amount", 0)
 
         # refund
-        user_obj["hold"] -= amount
+        # ensure we don't create negative hold
+        if user_obj["hold"] >= amount:
+            user_obj["hold"] -= amount
+        else:
+            # if hold smaller than amount (shouldn't happen), set hold to 0
+            user_obj["hold"] = 0
+
         user_obj["balance"] += amount
 
         bot.answer_callback_query(call.id)
