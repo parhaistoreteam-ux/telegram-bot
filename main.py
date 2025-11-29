@@ -287,7 +287,7 @@ def handle_start(message):
             cur.execute("SELECT COUNT(*) as c FROM users")
             total = cur.fetchone()['c']
             conn.close()
-        bot.send_message(message.chat.id, "Admin Panel Loaded"")
+        bot.send_message(message.chat.id, "Admin Panel Loaded")
 
 
 @bot.message_handler(commands=['help'])
