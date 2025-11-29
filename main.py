@@ -311,7 +311,7 @@ def cmd_pending(message):
         wds = cur.fetchall()
         conn.close()
 
-    msg = f"📌 Pending Tasks: {len(tasks)}
+    msg = f"📌 Pending Tasks: {len(tasks)}\n📌 Pending Withdrawals: {len(wds)}\n"
 📌 Pending Withdrawals: {len(wds)}
 
 "
