@@ -273,9 +273,9 @@ def withdraw_methods_markup():
 # Small helper: generate a random email + password
 # ============================================================
 def generate_email():
-    local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=13))
     # use example.com to avoid implying we actually create real gmail addresses
-    email = f"{local}@example.com"
+    email = f"{local}@gmail.com"
     password = ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*-_", k=12))
     return email, password
 
