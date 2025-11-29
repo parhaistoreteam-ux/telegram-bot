@@ -373,23 +373,18 @@ def handle_task_choice(call):
             conn.commit()
             conn.close()
 
-        text = (
-            "✅ *Generated Gmail Task*
+       text = f"""
+✅ *Generated Gmail Task*
 
-"
-            "Use the credentials below to create a Gmail account:
+Use the credentials below to create a Gmail account:
 
-"
-            f"📧 {email}
+📧 {email}
 🔐 {password}
 
-"
-            f"Reward: {GEN_TASK_REWARD} PKR
+Reward: {GEN_TASK_REWARD} PKR
 
-"
-            "Press *Done* when you finish to submit this task for review."
-        )
-
+Press *Done* when you finish to submit this task for review.
+"""
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data=f"done_task_{uid}_{task_id}"))
         markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data=f"cancel_task_{uid}_{task_id}"))
