@@ -298,34 +298,45 @@ def cmd_help(message):
 @bot.message_handler(commands=['pending'])
 def cmd_pending(message):
     # admin-only: show pending tasks and withdraws
-    if message.chat.id != ADMIN_CHAT_ID:
-        bot.reply_to(message, "You are not authorized to use this command.")
-        return
+   # admin-only: show pending tasks and withdrawals
+if message.chat.id != ADMIN_CHAT_ID:
+    bot.reply_to(message, "You are not authorized to use this command.")
+    return
 
-    with DB_LOCK:
-        conn = get_db_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM tasks WHERE status = 'pending_admin'")
-        tasks = cur.fetchall()
-        cur.execute("SELECT * FROM withdraws WHERE status = 'pending'")
-        wds = cur.fetchall()
-        conn.close()
+with DB_LOCK:
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM tasks WHERE status = 'pending_admin'")
+    tasks = cur.fetchall()
+    cur.execute("SELECT * FROM withdraws WHERE status = 'pending'")
+    wds = cur.fetchall()
+    conn.close()
 
-    msg = f"📌 Pending Tasks: {len(tasks)}\n📌 Pending Withdrawals: {len(wds)}\n"
-📌 Pending Withdrawals: {len(wds)}
+# Build message safely
+msg = (
+    f"📌 Pending Tasks: {len(tasks)}\n"
+    f"📌 Pending Withdrawals: {len(wds)}\n\n"
+)
 
-"
+for t in tasks[:30]:
+    msg += (
+        f"TaskID: `{t['task_id']}`  "
+        f"User: `{t['user_id']}`  "
+        f"Reward: `{t['reward']}`  "
+        f"Type: `{t['type']}`\n"
+    )
 
-    for t in tasks[:30]:
-        msg += f"TaskID: `{t['task_id']}` User: `{t['user_id']}` Reward: `{t['reward']}` Type: `{t['type']}`
-"
-    msg += "
-"
-    for w in wds[:30]:
-        msg += f"WDID: `{w['id']}` User: `{w['user_id']}` Amount(PKR): `{w['pkr_amount']}` Method: `{w['method']}`
-"
+msg += "\n"
 
-    bot.send_message(ADMIN_CHAT_ID, msg)
+for w in wds[:30]:
+    msg += (
+        f"WDID: `{w['id']}`  "
+        f"User: `{w['user_id']}`  "
+        f"Amount(PKR): `{w['pkr_amount']}`  "
+        f"Method: `{w['method']}`\n"
+    )
+
+bot.send_message(ADMIN_CHAT_ID, msg)
 
 # text / command handlers for help/menu
 @bot.message_handler(func=lambda m: m.text == "❓ Help")
