@@ -1,3 +1,5 @@
+from database import *
+init_db()
 import os
 import sqlite3
 import threading
