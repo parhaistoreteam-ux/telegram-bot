@@ -42,6 +42,12 @@ WITHDRAW_PROCESSING_HOURS = 5
 DB_LOCK = threading.Lock()
 
 # ============================================================
+# In-memory minimal state for composing tasks and withdraw steps
+# This is small transient state only; core data persists to SQLite
+# ============================================================
+users_state = {}  # {uid: {state: 'awaiting_own_gmail' or withdraw steps, temp: {...}}}
+
+# ============================================================
 # DATABASE HELPERS
 # ============================================================
 
@@ -133,21 +139,22 @@ HELP_TEXT = (
     "• Tasks\n\n"
     "❗ Need help? Contact admin."
 )
+
 # ============================================================
-# DATABASE OPERATIONS
+# DB OPERATIONS
 # ============================================================
 
 def ensure_user_db(uid, start_referrer=None):
     with DB_LOCK:
         conn = get_db_conn()
         cur = conn.cursor()
-        # create user if not exist
         cur.execute("SELECT * FROM users WHERE id = ?", (uid,))
         row = cur.fetchone()
         if not row:
-            cur.execute("INSERT INTO users (id, balance, hold, tasks_completed, referrer, referrals_count, referral_earned, next_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (uid, 0, 0, 0, start_referrer if start_referrer and start_referrer != uid else None, 0, 0, 1))
-            # if start_referrer set, increase their referrals_count
+            cur.execute(
+                "INSERT INTO users (id, balance, hold, tasks_completed, referrer, referrals_count, referral_earned, next_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, 0, 0, 0, start_referrer if start_referrer and start_referrer != uid else None, 0, 0, 1)
+            )
             if start_referrer and start_referrer != uid:
                 cur.execute("SELECT * FROM users WHERE id = ?", (start_referrer,))
                 r = cur.fetchone()
@@ -188,7 +195,6 @@ def get_and_inc_next_task_id(uid):
         cur.execute("SELECT next_task_id FROM users WHERE id = ?", (uid,))
         row = cur.fetchone()
         if not row:
-            # create user
             ensure_user_db(uid)
             cur.execute("SELECT next_task_id FROM users WHERE id = ?", (uid,))
             row = cur.fetchone()
@@ -199,7 +205,7 @@ def get_and_inc_next_task_id(uid):
         return task_id
 
 # ============================================================
-# ADMIN NOTIFY (uses DB IDs in callbacks)
+# ADMIN NOTIFY
 # ============================================================
 
 def admin_notify(text, markup=None):
@@ -262,12 +268,22 @@ def withdraw_methods_markup():
     return markup
 
 # ============================================================
+# Small helper: generate a random email + password
+# ============================================================
+def generate_email():
+    local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    # use example.com to avoid implying we actually create real gmail addresses
+    email = f"{local}@example.com"
+    password = ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*-_", k=12))
+    return email, password
+
+# ============================================================
 # BOT COMMANDS & HANDLERS
 # ============================================================
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    args = message.text.split()
+    args = (message.text or "").split()
     ref = None
 
     if len(args) > 1:
@@ -280,14 +296,14 @@ def handle_start(message):
     bot.send_message(message.chat.id, "Welcome! Choose an option:", reply_markup=main_menu())
 
     if message.chat.id == ADMIN_CHAT_ID:
-        # show counts
+        # show counts (example admin notice)
         with DB_LOCK:
             conn = get_db_conn()
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) as c FROM users")
             total = cur.fetchone()['c']
             conn.close()
-        bot.send_message(message.chat.id, "Admin Panel Loaded")
+        bot.send_message(message.chat.id, f"Admin Panel Loaded — {total} users")
 
 
 @bot.message_handler(commands=['help'])
@@ -298,127 +314,54 @@ def cmd_help(message):
 @bot.message_handler(commands=['pending'])
 def cmd_pending(message):
     # admin-only: show pending tasks and withdraws
-   # admin-only: show pending tasks and withdrawals
-if message.chat.id != ADMIN_CHAT_ID:
-    bot.reply_to(message, "You are not authorized to use this command.")
-    return
+    if message.chat.id != ADMIN_CHAT_ID:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
 
-with DB_LOCK:
-    conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM tasks WHERE status = 'pending_admin'")
-    tasks = cur.fetchall()
-    cur.execute("SELECT * FROM withdraws WHERE status = 'pending'")
-    wds = cur.fetchall()
-    conn.close()
+    with DB_LOCK:
+        conn = get_db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM tasks WHERE status = 'pending_admin'")
+        tasks = cur.fetchall()
+        cur.execute("SELECT * FROM withdraws WHERE status = 'pending'")
+        wds = cur.fetchall()
+        conn.close()
 
-# Build message safely
-msg = (
-    f"📌 Pending Tasks: {len(tasks)}\n"
-    f"📌 Pending Withdrawals: {len(wds)}\n\n"
-)
-
-for t in tasks[:30]:
-    msg += (
-        f"TaskID: `{t['task_id']}`  "
-        f"User: `{t['user_id']}`  "
-        f"Reward: `{t['reward']}`  "
-        f"Type: `{t['type']}`\n"
+    msg = (
+        f"📌 Pending Tasks: {len(tasks)}\n"
+        f"📌 Pending Withdrawals: {len(wds)}\n\n"
     )
 
-msg += "\n"
+    for t in tasks[:30]:
+        msg += (
+            f"TaskID: `{t['task_id']}`  "
+            f"User: `{t['user_id']}`  "
+            f"Reward: `{t['reward']}`  "
+            f"Type: `{t['type']}`\n"
+        )
 
-for w in wds[:30]:
-    msg += (
-        f"WDID: `{w['id']}`  "
-        f"User: `{w['user_id']}`  "
-        f"Amount(PKR): `{w['pkr_amount']}`  "
-        f"Method: `{w['method']}`\n"
-    )
+    msg += "\n"
 
-bot.send_message(ADMIN_CHAT_ID, msg)
+    for w in wds[:30]:
+        msg += (
+            f"WDID: `{w['id']}`  "
+            f"User: `{w['user_id']}`  "
+            f"Amount(PKR): `{w['pkr_amount']}`  "
+            f"Method: `{w['method']}`\n"
+        )
+
+    bot.send_message(ADMIN_CHAT_ID, msg)
 
 # text / command handlers for help/menu
 @bot.message_handler(func=lambda m: m.text == "❓ Help")
 def button_help(message):
     bot.send_message(message.chat.id, HELP_TEXT)
 
+
 @bot.message_handler(func=lambda m: m.text == "📝 Tasks")
 def show_tasks(message):
     ensure_user_db(message.chat.id)
     bot.send_message(message.chat.id, "Choose a task type:", reply_markup=tasks_menu())
-
-# ============================================================
-# TASK SELECTION CALLBACKS
-# ============================================================
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("task_") or call.data == "help")
-def handle_task_choice(call):
-    uid = call.message.chat.id
-    ensure_user_db(uid)
-
-    if call.data == "task_gen":
-        email, password = generate_email()
-        # store temporary current_task in a simple ephemeral DB table? We'll store in-memory mapping for composing
-        # For full persistence we attach as a draft in tasks with status 'draft' and a temp task_id from next_task_id
-        task_id = get_and_inc_next_task_id(uid)
-        created_at = datetime.utcnow().isoformat()
-        with DB_LOCK:
-            conn = get_db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO tasks (user_id, task_id, type, email, password, reward, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, task_id, 'generated', email, password, GEN_TASK_REWARD, 'draft', created_at)
-            )
-            conn.commit()
-            conn.close()
-
-       text = f"""
-✅ *Generated Gmail Task*
-
-Use the credentials below to create a Gmail account:
-
-📧 {email}
-🔐 {password}
-
-Reward: {GEN_TASK_REWARD} PKR
-
-Press *Done* when you finish to submit this task for review.
-"""
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data=f"done_task_{uid}_{task_id}"))
-        markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data=f"cancel_task_{uid}_{task_id}"))
-
-        bot.send_message(uid, text, reply_markup=markup, parse_mode="Markdown")
-        return
-
-    if call.data == "task_own":
-        # set state to accept credentials
-        # we'll store a draft task when user sends credentials
-        with DB_LOCK:
-            ensure_user_db(uid)
-        users_state[uid] = {'state': 'awaiting_own_gmail'}
-        bot.send_message(uid, "Send:
-email password", parse_mode="Markdown")
-        return
-
-    if call.data == "task_fb":
-        with DB_LOCK:
-            ensure_user_db(uid)
-        users_state[uid] = {'state': 'awaiting_fb_details'}
-        bot.send_message(uid, "Send: fb_id fb_email fb_password 2fa_code", parse_mode="Markdown")
-        return
-
-    if call.data == "help":
-        bot.send_message(uid, HELP_TEXT)
-        return
-
-# ============================================================
-# In-memory minimal state for composing tasks and withdraw steps
-# This is small transient state only; core data persists to SQLite
-# ============================================================
-
-users_state = {}  # {uid: {state: 'awaiting_own_gmail' or withdraw steps, temp: {...}}}
 
 # ============================================================
 # MAIN TEXT HANDLER
@@ -434,9 +377,8 @@ def handle_text(message):
     # BALANCE
     if text.lower() in ["💼 balance", "balance"]:
         user_row = get_user_db(uid)
-        bot.send_message(uid, f"💼 Balance: {user_row['balance']} PKR
-🔒 Hold: {user_row['hold']} PKR
-")
+        msg = f"💼 Balance: {user_row['balance']} PKR\n🔒 Hold: {user_row['hold']} PKR"
+        bot.send_message(uid, msg)
         return
 
     # WITHDRAW
@@ -458,8 +400,7 @@ def handle_text(message):
             link = f"https://t.me/{username}?start={uid}"
         except Exception:
             link = f"t.me/<bot_username>?start={uid}"
-        bot.send_message(uid, f"Your Referral Link:
-{link}")
+        bot.send_message(uid, f"Your Referral Link:\n{link}")
         return
 
     # HELP
@@ -482,9 +423,8 @@ def handle_text(message):
                 bot.send_message(uid, f"Minimum is {BINANCE_MIN_USD} USD")
                 return
             required_pkr = int(amt * BINANCE_PKR_PER_USD)
-            # check balance
             user_row = get_user_db(uid)
-            if user_row['balance'] < required_pkr:
+            if not user_row or user_row['balance'] < required_pkr:
                 bot.send_message(uid, f"❌ Not enough balance. You need {required_pkr} PKR.")
                 return
             state['temp'] = {'method': method, 'usd_amount': amt, 'pkr_amount': required_pkr}
@@ -493,7 +433,7 @@ def handle_text(message):
                 bot.send_message(uid, f"Minimum is {WITHDRAW_MIN_PKR} PKR")
                 return
             user_row = get_user_db(uid)
-            if user_row['balance'] < amt:
+            if not user_row or user_row['balance'] < amt:
                 bot.send_message(uid, "❌ Insufficient balance.")
                 return
             state['temp'] = {'method': method, 'pkr_amount': int(amt)}
@@ -534,12 +474,10 @@ def handle_text(message):
                 (uid, temp.get('method'), temp.get('account_name'), temp.get('account_number'), temp.get('pkr_amount'), temp.get('usd_amount'), 'pending', now)
             )
             wd_id = cur.lastrowid
-            # deduct balance and add to hold
             pkr_hold = temp.get('pkr_amount', 0)
-            # double-check balance
             cur.execute("SELECT balance, hold FROM users WHERE id = ?", (uid,))
             ur = cur.fetchone()
-            if ur['balance'] < pkr_hold:
+            if not ur or ur['balance'] < pkr_hold:
                 conn.rollback()
                 conn.close()
                 bot.send_message(uid, "❌ Unexpected error: insufficient balance.")
@@ -557,24 +495,15 @@ def handle_text(message):
         )
 
         admin_text = (
-            f"💸 *New Withdraw Request*
-"
-            f"WDID: `{wd_id}`
-"
-            f"User: `{uid}`
-"
-            f"Method: *{temp.get('method')}*
-"
-            f"Account Name: `{temp.get('account_name')}`
-"
-            f"Account Number: `{temp.get('account_number')}`
-"
-            f"Amount (PKR): `{temp.get('pkr_amount')}`
-"
-            f"Amount (USD): `{temp.get('usd_amount')}`
-"
-            f"Processing Time: {WITHDRAW_PROCESSING_HOURS} hours
-"
+            f"💸 *New Withdraw Request*\n"
+            f"WDID: `{wd_id}`\n"
+            f"User: `{uid}`\n"
+            f"Method: *{temp.get('method')}*\n"
+            f"Account Name: `{temp.get('account_name')}`\n"
+            f"Account Number: `{temp.get('account_number')}`\n"
+            f"Amount (PKR): `{temp.get('pkr_amount')}`\n"
+            f"Amount (USD): `{temp.get('usd_amount')}`\n"
+            f"Processing Time: {WITHDRAW_PROCESSING_HOURS} hours\n"
         )
 
         admin_notify(admin_text, admin_markup)
@@ -582,15 +511,12 @@ def handle_text(message):
         users_state.pop(uid, None)
         return
 
-    # ======================================================
     # TASK INPUTS (own gmail / fb) - storing as draft then submit
-    # ======================================================
     if state and state.get('state') == 'awaiting_own_gmail':
         parts = text.split()
         if len(parts) < 2:
             bot.send_message(uid, "Send: email password")
             return
-        # create draft task row
         task_id = get_and_inc_next_task_id(uid)
         now = datetime.utcnow().isoformat()
         with DB_LOCK:
@@ -638,16 +564,70 @@ def handle_text(message):
     bot.send_message(uid, "Use menu options.", reply_markup=main_menu())
 
 # ============================================================
-# CALLBACKS: task done/cancel, admin approvals
+# CALLBACKS: single handler for all callbacks
 # ============================================================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    data = call.data
-    caller = call.message.chat.id
+    data = call.data or ""
+    caller = call.from_user.id if call.from_user else (call.message.chat.id if call.message else None)
 
-    # USER selects withdraw method
-    if data.startswith("wd_") and caller != ADMIN_CHAT_ID:
+    # TASK menu (user asking for tasks)
+    if data == "task_gen" and caller != ADMIN_CHAT_ID:
+        uid = caller
+        ensure_user_db(uid)
+        email, password = generate_email()
+        task_id = get_and_inc_next_task_id(uid)
+        created_at = datetime.utcnow().isoformat()
+        with DB_LOCK:
+            conn = get_db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO tasks (user_id, task_id, type, email, password, reward, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, task_id, 'generated', email, password, GEN_TASK_REWARD, 'draft', created_at)
+            )
+            conn.commit()
+            conn.close()
+
+        text = (
+            "✅ *Generated Gmail Task*\n\n"
+            "Use the credentials below to create a Gmail account:\n\n"
+            f"📧 `{email}`\n"
+            f"🔐 `{password}`\n\n"
+            f"Reward: {GEN_TASK_REWARD} PKR\n\n"
+            "Press *Done* when you finish to submit this task for review."
+        )
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ Done Task", callback_data=f"done_task_{uid}_{task_id}"))
+        markup.add(types.InlineKeyboardButton("❌ Cancel Task", callback_data=f"cancel_task_{uid}_{task_id}"))
+        bot.answer_callback_query(call.id)
+        bot.send_message(uid, text, reply_markup=markup, parse_mode="Markdown")
+        return
+
+    if data == "task_own" and caller != ADMIN_CHAT_ID:
+        uid = caller
+        ensure_user_db(uid)
+        users_state[uid] = {'state': 'awaiting_own_gmail'}
+        bot.answer_callback_query(call.id)
+        bot.send_message(uid, "Send:\nemail password", parse_mode="Markdown")
+        return
+
+    if data == "task_fb" and caller != ADMIN_CHAT_ID:
+        uid = caller
+        ensure_user_db(uid)
+        users_state[uid] = {'state': 'awaiting_fb_details'}
+        bot.answer_callback_query(call.id)
+        bot.send_message(uid, "Send: fb_id fb_email fb_password 2fa_code", parse_mode="Markdown")
+        return
+
+    if data == "help":
+        bot.answer_callback_query(call.id)
+        bot.send_message(caller, HELP_TEXT)
+        return
+
+    # USER selects withdraw method (callback data: wd_<method>)
+    if data.startswith("wd_") and caller is not None and caller != ADMIN_CHAT_ID:
         method = data.split("_", 1)[1]
         users_state[caller] = {'state': f'awaiting_withdraw_{method}'}
         bot.answer_callback_query(call.id)
@@ -664,10 +644,10 @@ def callback_query(call):
         try:
             target = int(parts[2])
             task_id = int(parts[3])
-        except:
-            return bot.answer_callback_query(call.id, "Invalid data.")
+        except Exception:
+            bot.answer_callback_query(call.id, "Invalid data.")
+            return
 
-        # mark draft as pending_admin
         with DB_LOCK:
             conn = get_db_conn()
             cur = conn.cursor()
@@ -675,11 +655,10 @@ def callback_query(call):
             t = cur.fetchone()
             if not t:
                 conn.close()
-                return bot.answer_callback_query(call.id, "Task not found or already submitted.")
+                bot.answer_callback_query(call.id, "Task not found or already submitted.")
+                return
             cur.execute("UPDATE tasks SET status = 'pending_admin' WHERE id = ?", (t['id'],))
             conn.commit()
-
-            # fetch updated task
             cur.execute("SELECT * FROM tasks WHERE id = ?", (t['id'],))
             t2 = cur.fetchone()
             conn.close()
@@ -687,28 +666,22 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
         bot.send_message(target, "⏳ Task submitted. Admin reviewing. You can do other tasks while this is pending.")
 
-        # notify admin
-        details = "📥 *New Task Submitted*
-"
-        details += f"👤 User: `{target}`
-"
-        details += f"💰 Reward: `{t2['reward']}` PKR
-"
-        details += f"📌 Type: *{t2['type']}*
-"
-        details += f"🔢 TaskID: `{t2['task_id']}`
-
-"
-        if t2['type'] == 'generated' or t2['type'] == 'own':
-            details += f"Email: `{t2['email']}`
-Password: `{t2['password']}`
-"
+        details = (
+            "📥 *New Task Submitted*\n"
+            f"👤 User: `{target}`\n"
+            f"💰 Reward: `{t2['reward']}` PKR\n"
+            f"📌 Type: *{t2['type']}*\n"
+            f"🔢 TaskID: `{t2['task_id']}`\n\n"
+        )
+        if t2['type'] in ('generated', 'own'):
+            details += f"Email: `{t2['email']}`\nPassword: `{t2['password']}`\n"
         elif t2['type'] == 'facebook':
-            details += f"FB ID: `{t2['fb_id']}`
-Email: `{t2['email']}`
-Password: `{t2['password']}`
-2FA: `{t2['twofa']}`
-"
+            details += (
+                f"FB ID: `{t2['fb_id']}`\n"
+                f"Email: `{t2['email']}`\n"
+                f"Password: `{t2['password']}`\n"
+                f"2FA: `{t2['twofa']}`\n"
+            )
 
         admin_markup = types.InlineKeyboardMarkup()
         admin_markup.add(
@@ -724,8 +697,9 @@ Password: `{t2['password']}`
         try:
             target = int(parts[2])
             task_id = int(parts[3])
-        except:
-            return bot.answer_callback_query(call.id, "Invalid data.")
+        except Exception:
+            bot.answer_callback_query(call.id, "Invalid data.")
+            return
         with DB_LOCK:
             conn = get_db_conn()
             cur = conn.cursor()
@@ -739,13 +713,14 @@ Password: `{t2['password']}`
         bot.send_message(target, "Task canceled.", reply_markup=main_menu())
         return
 
-    # ADMIN: Approve task (by tasks.id)
+    # ADMIN: Approve task
     if data.startswith("approve_task_") and caller == ADMIN_CHAT_ID:
         parts = data.split("_")
         try:
             db_task_id = int(parts[2])
-        except:
-            return bot.answer_callback_query(call.id, "Invalid data.")
+        except Exception:
+            bot.answer_callback_query(call.id, "Invalid data.")
+            return
 
         with DB_LOCK:
             conn = get_db_conn()
@@ -754,25 +729,22 @@ Password: `{t2['password']}`
             t = cur.fetchone()
             if not t:
                 conn.close()
-                return bot.answer_callback_query(call.id, "Task not found.")
+                bot.answer_callback_query(call.id, "Task not found.")
+                return
             if t['status'] == 'approved':
                 conn.close()
-                return bot.answer_callback_query(call.id, "Already approved.")
+                bot.answer_callback_query(call.id, "Already approved.")
+                return
 
-            # credit user balance
             cur.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (t['reward'], t['user_id']))
-            # mark task approved
             cur.execute("UPDATE tasks SET status = 'approved' WHERE id = ?", (db_task_id,))
-            # increment tasks_completed
             cur.execute("UPDATE users SET tasks_completed = tasks_completed + 1 WHERE id = ?", (t['user_id'],))
-            # give referral bonus
             cur.execute("SELECT referrer FROM users WHERE id = ?", (t['user_id'],))
             r = cur.fetchone()
             if r and r['referrer']:
                 refid = r['referrer']
-                cur.execute("UPDATE users SET balance = balance + ? , referral_earned = referral_earned + ? WHERE id = ?", (REFERRAL_BONUS_PER_TASK, REFERRAL_BONUS_PER_TASK, refid))
+                cur.execute("UPDATE users SET balance = balance + ?, referral_earned = referral_earned + ? WHERE id = ?", (REFERRAL_BONUS_PER_TASK, REFERRAL_BONUS_PER_TASK, refid))
             conn.commit()
-            # fetch user to notify
             cur.execute("SELECT balance FROM users WHERE id = ?", (t['user_id'],))
             ur = cur.fetchone()
             conn.close()
@@ -787,8 +759,9 @@ Password: `{t2['password']}`
         parts = data.split("_")
         try:
             db_task_id = int(parts[2])
-        except:
-            return bot.answer_callback_query(call.id, "Invalid data.")
+        except Exception:
+            bot.answer_callback_query(call.id, "Invalid data.")
+            return
 
         with DB_LOCK:
             conn = get_db_conn()
@@ -797,10 +770,12 @@ Password: `{t2['password']}`
             t = cur.fetchone()
             if not t:
                 conn.close()
-                return bot.answer_callback_query(call.id, "Task not found.")
+                bot.answer_callback_query(call.id, "Task not found.")
+                return
             if t['status'] == 'rejected':
                 conn.close()
-                return bot.answer_callback_query(call.id, "Already rejected.")
+                bot.answer_callback_query(call.id, "Already rejected.")
+                return
             cur.execute("UPDATE tasks SET status = 'rejected' WHERE id = ?", (db_task_id,))
             conn.commit()
             conn.close()
@@ -815,8 +790,9 @@ Password: `{t2['password']}`
         parts = data.split("_")
         try:
             wd_id = int(parts[2])
-        except:
-            return bot.answer_callback_query(call.id, "Invalid data.")
+        except Exception:
+            bot.answer_callback_query(call.id, "Invalid data.")
+            return
         with DB_LOCK:
             conn = get_db_conn()
             cur = conn.cursor()
@@ -824,11 +800,12 @@ Password: `{t2['password']}`
             w = cur.fetchone()
             if not w:
                 conn.close()
-                return bot.answer_callback_query(call.id, "Withdraw not found.")
+                bot.answer_callback_query(call.id, "Withdraw not found.")
+                return
             if w['status'] == 'approved':
                 conn.close()
-                return bot.answer_callback_query(call.id, "Already approved.")
-            # mark approved and reduce hold
+                bot.answer_callback_query(call.id, "Already approved.")
+                return
             cur.execute("UPDATE withdraws SET status = 'approved' WHERE id = ?", (wd_id,))
             p = w['pkr_amount'] if w['pkr_amount'] else 0
             cur.execute("UPDATE users SET hold = hold - ? WHERE id = ?", (p, w['user_id']))
@@ -844,8 +821,9 @@ Password: `{t2['password']}`
         parts = data.split("_")
         try:
             wd_id = int(parts[2])
-        except:
-            return bot.answer_callback_query(call.id, "Invalid data.")
+        except Exception:
+            bot.answer_callback_query(call.id, "Invalid data.")
+            return
         with DB_LOCK:
             conn = get_db_conn()
             cur = conn.cursor()
@@ -853,11 +831,12 @@ Password: `{t2['password']}`
             w = cur.fetchone()
             if not w:
                 conn.close()
-                return bot.answer_callback_query(call.id, "Withdraw not found.")
+                bot.answer_callback_query(call.id, "Withdraw not found.")
+                return
             if w['status'] == 'rejected':
                 conn.close()
-                return bot.answer_callback_query(call.id, "Already rejected.")
-            # refund balance and reduce hold
+                bot.answer_callback_query(call.id, "Already rejected.")
+                return
             p = w['pkr_amount'] if w['pkr_amount'] else 0
             cur.execute("UPDATE users SET hold = hold - ?, balance = balance + ? WHERE id = ?", (p, p, w['user_id']))
             cur.execute("UPDATE withdraws SET status = 'rejected' WHERE id = ?", (wd_id,))
@@ -868,7 +847,7 @@ Password: `{t2['password']}`
         bot.send_message(ADMIN_CHAT_ID, f"Rejected withdraw {wd_id} for {w['user_id']}")
         return
 
-    # default
+    # default: just acknowledge
     bot.answer_callback_query(call.id)
 
 # ============================================================
